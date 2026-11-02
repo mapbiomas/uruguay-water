@@ -1,0 +1,229 @@
+// ES: País utilizado en la descripción de las tareas; las rutas de assets están fijadas a Uruguay.
+// EN: Country used in task descriptions; asset paths are fixed to Uruguay.
+var paisName = 'Uruguay';
+
+// ES: Subcarpeta de entrada con las clasificaciones mensuales filtradas.
+// EN: Input subfolder containing filtered monthly classifications.
+var imput_imgColl = '02-mask-02'
+
+// ES: Límite nacional utilizado para definir el rectángulo de exportación.
+// EN: National boundary used to define the export bounding rectangle.
+var pais = ee.FeatureCollection('projects/mapbiomas-uruguay/assets/WATER/AUXILIARY_DATA/VECTOR/Limite_Uruguay')
+
+// ES: Parámetros de inspección del stack inicial; la capa que los utiliza está desactivada.
+// EN: Initial stack inspection parameters; the layer using them is disabled.
+var imageVisParam = {"opacity":1,"bands":["w_1_2"],"min":1,"max":9,"palette":['0000ff','009900','5af100','ffffff','000000','ff0000','ff60c7','c6c6c6','ffff00']};
+
+// ES: Mantener los extremos de la serie. Para dividir tareas, ajustar el bucle for.
+// EN: Keep the series endpoints unchanged. To split tasks, adjust the for loop.
+var y_start = 1985
+var y_end = 2025
+
+// ES: Obtener en el cliente los 41 años de la serie, ambos extremos incluidos.
+// EN: Retrieve the 41 years on the client, including both endpoints.
+var years = ee.List.sequence(y_start,y_end).getInfo()
+//var year = 2022
+
+// ES: Mes utilizado únicamente para visualizar las capas de entrada y salida.
+// EN: Month used only to display input and output layers.
+var viz_month = 'w_1'
+
+// ES: Procesar los índices 0–40. El límite 41 está fijado para la serie 1985–2025.
+// EN: Process indices 0–40. The limit of 41 is fixed for the 1985–2025 series.
+for (var i=0; i<41; i++) {
+  var year = years[i];
+
+  // ES: Construir una ventana de cinco años consecutivos.
+  //     Para años interiores: año−2 a año+2; al inicio: 1985–1989; al final: 2021–2025.
+  //     La ventana se desplaza en los extremos, sin solicitar años fuera de la serie.
+  // EN: Build a window of five consecutive years.
+  //     For interior years: year−2 through year+2; at the beginning: 1985–1989; at the end: 2021–2025.
+  //     Shift the window at the endpoints without requesting years outside the series.
+  var y_window = ee.List(ee.Array([0,1,2,3,4]).add(ee.Algorithms.If(
+      ee.Number(year).gt(y_end - 2),
+      ee.Number(y_end - year - 4).add(year),
+      ee.Number(y_start - year).max(-2).add(year)))).getInfo()
+
+  print(y_window)
+
+  // ES: Apilar las cinco imágenes anuales en orden cronológico.
+  //     Se presupone que cada imagen contiene exactamente 12 bandas ordenadas de enero a diciembre.
+  //     addBands añade sufijos a nombres repetidos; luego se renombra todo el stack.
+  // EN: Stack the five annual images in chronological order.
+  //     Each image is assumed to contain exactly 12 bands ordered from January through December.
+  //     addBands appends suffixes to duplicate names; the entire stack is renamed later.
+  var img = ee.Image('projects/mapbiomas-uruguay/assets/WATER/COLLECTION-1/00-BETA/POSTPROCESSING/' + imput_imgColl + '/water-mask-' + y_window[0])
+            .addBands(ee.Image('projects/mapbiomas-uruguay/assets/WATER/COLLECTION-1/00-BETA/POSTPROCESSING/' + imput_imgColl + '/water-mask-' + y_window[1]))
+            .addBands(ee.Image('projects/mapbiomas-uruguay/assets/WATER/COLLECTION-1/00-BETA/POSTPROCESSING/' + imput_imgColl + '/water-mask-' + y_window[2]))
+            .addBands(ee.Image('projects/mapbiomas-uruguay/assets/WATER/COLLECTION-1/00-BETA/POSTPROCESSING/' + imput_imgColl + '/water-mask-' + y_window[3]))
+            .addBands(ee.Image('projects/mapbiomas-uruguay/assets/WATER/COLLECTION-1/00-BETA/POSTPROCESSING/' + imput_imgColl + '/water-mask-' + y_window[4]))
+
+  print ("first img", img)
+  //Map.addLayer(img, imageVisParam,'input')
+
+  // ES: Numerar las bandas desde 1; se esperan 60 meses en el stack.
+  // EN: Number bands starting at 1; the stack is expected to contain 60 months.
+  var n_bands = img.bandNames().size();
+  var bands_size = ee.List.sequence(1, n_bands, 1);
+
+  // ES: Construir nombres secuenciales. slice(0,-2) elimina los dos últimos caracteres;
+  //     esta expresión original presupone una representación numérica con sufijo decimal .0.
+  // EN: Build sequential names. slice(0,-2) removes the last two characters;
+  //     this original expression assumes numeric string formatting with a .0 decimal suffix.
+  var bands = bands_size.map(function(index){
+    return ee.String('w_').cat(index).slice(0,-2);
+  });
+
+  //collection = collection.toBands().rename(bands);
+  img = img.rename(bands)
+  //print('img rename',img)
+
+  // ES: Conservar las clases originales; no convertir la clasificación en una máscara binaria.
+  // EN: Retain original classes; do not convert the classification to a binary mask.
+  var water = img
+  //var water = bands_size.map(function(month){
+  //     var water_remapped = collection.select(ee.String('w_').cat(month).slice(0,-2)).remap([0,1,2,3,4], [0,1,1,0,2]);
+  //     return water_remapped;
+  //});
+  //
+  //water = ee.ImageCollection(water).toBands().rename(bands);
+  //Map.addLayer(water.select(0).mask(water.select(0).neq(5)))
+
+  // ES: Identificadores mensuales dentro de la ventana completa.
+  // EN: Monthly identifiers within the full window.
+  var ListMonths = ee.List.sequence(1, n_bands, 1);
+
+  // ES: Seleccionar los 12 meses del año objetivo según su posición en la ventana.
+  //     Año inicial: 1–12; segundo: 13–24; interiores: 25–36;
+  //     penúltimo: 37–48; último: 49–60. Los límites finales de slice son exclusivos.
+  // EN: Select the target year's 12 months according to its position in the window.
+  //     First year: 1–12; second: 13–24; interior years: 25–36;
+  //     penultimate: 37–48; last: 49–60. The end indices of slice are exclusive.
+  if (year - y_start == 0 ){
+    var process_block = ListMonths.slice(0,12)
+  } else {
+    if (year - y_start == 1 ){
+      var process_block = ListMonths.slice(12,24)
+    } else {
+      if (y_end - year == 1){
+        var process_block = ListMonths.slice(36,48)
+      }else {
+        if (y_end - year == 0){
+          var process_block = ListMonths.slice(48,60)
+        }else {
+          var process_block = ListMonths.slice(24,36)
+        }
+      }
+    }
+  }
+  print('process_block',process_block)
+
+  // ES: Rellenar cada mes objetivo con valores de otros meses de la ventana.
+  //     Se copian clases existentes; no se calcula una interpolación ni una votación temporal.
+  // EN: Fill each target month with values from other months within the window.
+  //     Existing classes are copied; no interpolation or temporal voting is calculated.
+  var output = process_block.map(function(month) {
+
+    // ES: Enmascarar clase 5 (no observado), manteniendo también la máscara preexistente.
+    //     Las restantes clases válidas conservan prioridad sobre cualquier mes alternativo.
+    // EN: Mask class 5 (unobserved), also retaining the existing mask.
+    //     All remaining valid classes take priority over any alternative month.
+    var actual = water.select(ee.String('w_').cat(month).slice(0,-2))
+                .updateMask(water.select(ee.String('w_').cat(month).slice(0,-2)).neq(5));
+
+    // ES: Meses anteriores del más cercano al más lejano y meses posteriores en orden ascendente.
+    // EN: Previous months from nearest to farthest, and following months in ascending order.
+    var list_prev = ListMonths.slice(0, ee.Number(month).subtract(1)).reverse();
+    var list_next = ListMonths.slice(month, n_bands);
+
+    // ES: Intercalar posterior y anterior: +1, −1, +2, −2, etc.
+    //     zip se detiene al terminar la lista más corta.
+    // EN: Interleave following and previous months: +1, −1, +2, −2, etc.
+    //     zip stops when the shorter list ends.
+    var z_loop = list_next.zip(list_prev);
+
+    // ES: Añadir los meses restantes del lado más largo y eliminar duplicados.
+    //     La prioridad queda definida por proximidad temporal, con el posterior primero en empates.
+    // EN: Append remaining months from the longer side and remove duplicates.
+    //     Priority follows temporal proximity, with the following month first in a tie.
+    var list_month_gap = ee.List (
+    ee.Algorithms.If(
+    ee.Number (list_next.size()).gt(list_prev.size()),
+    ee.List(z_loop.flatten().cat(list_next).distinct()),
+    ee.List(z_loop.flatten().cat(list_prev).distinct())
+    ));
+
+    var z_size = list_month_gap.size();
+
+    // ES: Preparar cada mes donante: excluir clase 5 y asignar rango de prioridad desde 1.
+    //     No se restringe la búsqueda al mismo mes calendario ni se impone una distancia máxima
+    //     menor que la ventana completa; esto puede trasladar estados estacionales entre meses.
+    // EN: Prepare each donor month: exclude class 5 and assign a priority rank starting at 1.
+    //     The search is not restricted to the same calendar month, nor is a maximum distance
+    //     shorter than the full window imposed; seasonal states may therefore be transferred between months.
+    var forLoop2 = ee.List.sequence (0, z_size.subtract(1),1).map(function(i) {
+      var m_next = list_month_gap.get(i);
+      var next = water.select(ee.String('w_').cat(m_next).slice(0,-2))
+                 .updateMask(water.select(ee.String('w_').cat(m_next).slice(0,-2)).neq(5));
+      return next.rename("w").set("w", ee.Number(i).add(1));
+    });
+
+    forLoop2 = ee.ImageCollection(forLoop2);
+
+    // ES: Ordenar de mayor a menor rango. mosaic prioriza las últimas imágenes válidas:
+    //     primero el mes actual (rango 0), luego el donante de rango 1, y así sucesivamente.
+    //     Si ningún mes tiene un valor válido, el píxel permanece enmascarado.
+    //     El relleno no guarda el mes de origen ni distingue clases originales de clases copiadas.
+    // EN: Sort from highest to lowest rank. mosaic prioritizes the last valid images:
+    //     first the current month (rank 0), then donor rank 1, and so on.
+    //     If no month has a valid value, the pixel remains masked.
+    //     Filling does not store the source month or distinguish original from copied classes.
+    return ee.ImageCollection.fromImages([actual.rename("w").set("w", ee.Number(0))]).merge(forLoop2).sort("w", false).mosaic();
+  });
+
+  //print('forLoop1',forLoop1)
+
+  // ES: Reconstruir una imagen anual con 12 bandas w_1 a w_12 y guardar el año.
+  //     La construcción de nombres conserva el supuesto de formato numérico indicado antes.
+  // EN: Rebuild an annual image with 12 bands named w_1 through w_12 and store the year.
+  //     Name construction retains the numeric formatting assumption described above.
+  var bNames = function(prefix){return ee.List.sequence(1,12,1).map(function(i){ return ee.String(prefix).cat(ee.String(i).slice(0,-2))})}
+  output = ee.ImageCollection(output).toBands().rename(bNames('w_'))
+  print('output',output)
+  output = output.set('year',year)
+
+  // ES: Visualizar las clases 1–9 del mes seleccionado con la paleta original.
+  // EN: Display classes 1–9 for the selected month using the original palette.
+  var imageVisParam1 = {"min":1,"max":9,'bands':viz_month,"palette":['0000ff','009900','5af100','ffffff','000000','ff0000','ff60c7','c6c6c6','ffff00']};
+
+  // ES: Crear una tarea por año: 41 tareas con el bucle completo. Ejecutarlas desde Tasks.
+  //     Exportar a 30 m con pirámides por moda. El rectángulo del país define la extensión;
+  //     no se aplica aquí un recorte explícito al contorno nacional.
+  // EN: Create one task per year: 41 tasks with the full loop. Run them from Tasks.
+  //     Export at 30 m with mode pyramids. The country bounding rectangle defines the extent;
+  //     no explicit clipping to the national outline is applied here.
+  Export.image.toAsset({
+    image: output,
+    description: 'water_gap_' + year + '_' + paisName,
+    assetId: 'projects/mapbiomas-uruguay/assets/WATER/COLLECTION-1/00-BETA/' +'POSTPROCESSING/03-gap-03/water-gap-' + year,
+    region: pais.geometry().bounds(),
+    scale: 30,
+    pyramidingPolicy: {
+        '.default': 'mode'
+    },
+    maxPixels: 1e13
+  });
+
+  // ES: Comparar entrada y salida del año, con capas inicialmente ocultas.
+  //     Restar 1 convierte los identificadores mensuales en índices de banda desde cero.
+  // EN: Compare yearly input and output with layers initially hidden.
+  //     Subtracting 1 converts monthly identifiers into zero-based band indices.
+  Map.addLayer(img.select(ee.List(ee.Array(process_block).subtract(1).toByte()).getInfo()).rename(bNames('w_')),imageVisParam1,'imput ' + viz_month + ' '  + year, false)
+  Map.addLayer(output,imageVisParam1,'output ' + viz_month + ' '  + year, false)
+
+  //return
+}
+
+// ES: Alternativa de combinación de colecciones, desactivada.
+// EN: Alternative collection combination, disabled.
+//var collection = col_2020.merge(col_2021).merge(col_2022);
